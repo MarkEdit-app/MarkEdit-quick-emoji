@@ -23,11 +23,16 @@ const protectedNodes = new Set([
   'HTMLBlock',
   'HTMLTag',
   'InlineCode',
+  'ListMark',
   'LinkTitle',
   'URL',
 ]);
 
 const tokenBoundary = /[\s.,!?;:()[\]{}'"`]/;
+const wordStart = /^[\p{L}\p{N}_]/u;
+const shortcode = /^:[\p{L}\p{N}_+-]+:$/u;
+const urlPrefix = /(?:[a-z][a-z\d+.-]*:\/\/|(?:data|mailto|sms|tel|urn):|www\.)\S*$/i;
+const emailPrefix = /\b[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function createQuickEmoji(custom?: unknown) {
   const index = buildIndex(custom);
@@ -139,7 +144,12 @@ function findMapping(
     }
 
     const from = position - mapping.emoticon.length;
-    if (hasTokenBoundaries(state, from, position) && !isProtectedSyntax(state, from, position)) {
+    if (conflictsWithMarkdown(state, from, mapping)
+      || isProtectedContext(state, from, position)) {
+      return undefined;
+    }
+
+    if (hasTokenBoundaries(state, from, position, mapping)) {
       return mapping;
     }
   }
@@ -147,11 +157,93 @@ function findMapping(
   return undefined;
 }
 
-function hasTokenBoundaries(state: EditorState, from: number, to: number) {
+function conflictsWithMarkdown(state: EditorState, from: number, mapping: Mapping) {
   const line = state.doc.lineAt(from);
-  const starts = from === line.from || tokenBoundary.test(state.sliceDoc(from - 1, from));
+  const linePrefix = state.sliceDoc(line.from, from);
+  if (mapping.emoticon.endsWith(']') && hasOpenBracket(linePrefix)) {
+    return true;
+  }
+
+  const atBlockMarker = /^\s*(?:>\s*)*$/.test(linePrefix);
+  return atBlockMarker && (mapping.emoticon === '8)' || mapping.emoticon.startsWith('>'));
+}
+
+function hasOpenBracket(text: string) {
+  let depth = 0;
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === '\\') {
+      index++;
+    } else if (text[index] === '[') {
+      depth++;
+    } else if (text[index] === ']' && depth > 0) {
+      depth--;
+    }
+  }
+
+  return depth > 0;
+}
+
+function hasTokenBoundaries(state: EditorState, from: number, to: number, mapping: Mapping) {
+  const line = state.doc.lineAt(from);
+  const needsStart = wordStart.test(mapping.emoticon) || shortcode.test(mapping.emoticon);
+  const starts = !needsStart || from === line.from || tokenBoundary.test(state.sliceDoc(from - 1, from));
   const ends = to === line.to || tokenBoundary.test(state.sliceDoc(to, to + 1));
   return starts && ends;
+}
+
+function isProtectedContext(state: EditorState, from: number, to: number) {
+  const line = state.doc.lineAt(from);
+  const linePrefix = state.sliceDoc(line.from, from);
+  return urlPrefix.test(linePrefix)
+    || emailPrefix.test(linePrefix)
+    || hasOpenCodeSpan(linePrefix)
+    || hasOpenHtmlTag(linePrefix)
+    || isProtectedSyntax(state, from, to);
+}
+
+function hasOpenCodeSpan(text: string) {
+  let delimiter = 0;
+  for (let index = 0; index < text.length;) {
+    if (text[index] !== '`' || (delimiter === 0 && isEscaped(text, index))) {
+      index++;
+      continue;
+    }
+
+    let end = index + 1;
+    while (text[end] === '`') {
+      end++;
+    }
+
+    const length = end - index;
+    if (delimiter === 0) {
+      delimiter = length;
+    } else if (delimiter === length) {
+      delimiter = 0;
+    }
+
+    index = end;
+  }
+
+  return delimiter > 0;
+}
+
+function hasOpenHtmlTag(text: string) {
+  let open = text.lastIndexOf('<');
+  while (open >= 0 && isEscaped(text, open)) {
+    open = text.lastIndexOf('<', open - 1);
+  }
+
+  return open > text.lastIndexOf('>')
+    && /^(?:<\/?[a-z][a-z\d-]*(?:\s|\/|$)|<!--|<![A-Z]|<\?)/i.test(text.slice(open));
+}
+
+function isEscaped(text: string, position: number) {
+  let slashes = 0;
+  while (position > slashes && text[position - slashes - 1] === '\\') {
+    slashes++;
+  }
+
+  return slashes % 2 === 1;
 }
 
 function isProtectedSyntax(state: EditorState, from: number, to: number) {

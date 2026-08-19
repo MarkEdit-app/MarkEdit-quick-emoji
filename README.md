@@ -1,8 +1,9 @@
 # MarkEdit-quick-emoji
 
-Silently converts standalone emoticons like `:)` to 😃 as you type. Pasted text
-and emoticons inside words, code, HTML, front matter, or URLs are ignored. Each
+Silently converts emoticons like `:)` to 😃 as you type. Pasted text and
+emoticons inside code, HTML, front matter, or URLs are ignored. Each
 conversion is a separate undo step, so <kbd>Command-Z</kbd> restores the emoticon.
+Mappings that conflict with Markdown syntax are skipped.
 
 ## Installation
 

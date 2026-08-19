@@ -28,13 +28,41 @@ test('adds and overrides mappings from settings', () => {
   assert.equal(typeText('Hello :', [7], ')', 'input.type', [], extension).text, 'Hello 🙂');
   assert.equal(typeText('Hello :', [7], '-', 'input.type', [], extension).text, 'Hello 😶');
   assert.equal(typeText('Hello :wave', [11], ':', 'input.type', [], extension).text, 'Hello 👋');
+  assert.equal(typeText('Hi:wave', [7], ':', 'input.type', [], extension).text, 'Hi:wave:');
 });
 
 test('avoids ambiguous and protected input', () => {
-  assert.deepEqual(typeText('word:', [5], ')').result, [false, 'word:)']);
+  assert.deepEqual(typeText('Hi:', [3], ')').result, [true, 'Hi😃']);
+  assert.deepEqual(typeText('Helloo:', [7], ')').result, [true, 'Helloo😃']);
+  assert.deepEqual(typeText('wordx', [5], ']').result, [false, 'wordx]']);
   assert.deepEqual(typeText('(:', [2], ')').result, [true, '(😃']);
   assert.deepEqual(typeText(':', [1], '-').result, [false, ':-']);
+  assert.deepEqual(typeText('- [x', [4], ']').result, [false, '- [x]']);
+  assert.deepEqual(typeText('- [X', [4], ']').result, [false, '- [X]']);
+  assert.deepEqual(typeText('[8', [2], ']').result, [false, '[8]']);
+  assert.deepEqual(typeText('[label :', [8], ']').result, [false, '[label :]']);
+  assert.deepEqual(typeText('8', [1], ')').result, [false, '8)']);
+  assert.deepEqual(typeText('> 8', [3], ')').result, [false, '> 8)']);
+  assert.deepEqual(typeText('- 8', [3], ')', 'input.type', [markdown]).result, [false, '- 8)']);
+  assert.deepEqual(typeText('1. 8', [4], ')', 'input.type', [markdown]).result, [false, '1. 8)']);
+  assert.deepEqual(typeText('x', [1], ']').result, [true, '😆']);
+  assert.deepEqual(typeText('[done] x', [8], ']').result, [true, '[done] 😆']);
+  assert.deepEqual(typeText('Hello :', [7], ']').result, [true, 'Hello 😃']);
+  assert.deepEqual(typeText('Number 8', [8], ')', 'input.type', [markdown]).result, [true, 'Number 😎']);
+  assert.deepEqual(typeText('>:', [2], '(').result, [false, '>:(']);
+  assert.deepEqual(typeText('> >:', [4], '(').result, [false, '> >:(']);
+  assert.deepEqual(typeText('Angry >:', [8], '(').result, [true, 'Angry 😠']);
   assert.deepEqual(typeText(' ', [1], ':)', 'input.paste').result, [false, ' :)']);
+  assert.deepEqual(typeText('https://x/:', [11], ')').result, [false, 'https://x/:)']);
+  assert.deepEqual(typeText('ftp://x/:', [9], ')').result, [false, 'ftp://x/:)']);
+  assert.deepEqual(typeText('mailto:a@b.com:', [15], ')').result, [false, 'mailto:a@b.com:)']);
+  assert.deepEqual(typeText('a@b.com:', [8], ')').result, [false, 'a@b.com:)']);
+  assert.deepEqual(typeText('`Hi:', [4], ')', 'input.type', [markdown]).result, [false, '`Hi:)']);
+  assert.deepEqual(typeText('``Hi:', [5], ')', 'input.type', [markdown]).result, [false, '``Hi:)']);
+  assert.deepEqual(typeText('<span title="Hi:', [16], ')', 'input.type', [markdown]).result,
+    [false, '<span title="Hi:)']);
+  assert.deepEqual(typeText('\\`Hi:', [5], ')', 'input.type', [markdown]).result, [true, '\\`Hi😃']);
+  assert.deepEqual(typeText('1 < 2 Hi:', [9], ')', 'input.type', [markdown]).result, [true, '1 < 2 Hi😃']);
   assert.deepEqual(typeText('` :`', [3], ')', 'input.type', [markdown]).result, [false, '` :)`']);
   assert.deepEqual(typeText('```\n:\n```', [5], ')', 'input.type', [markdown]).result, [false, '```\n:)\n```']);
   assert.deepEqual(typeText('[x](https://x/:)', [15], ')', 'input.type', [markdown]).result,
