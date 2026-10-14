@@ -1,7 +1,7 @@
 {
   "name": "markedit-quick-emoji",
-  "version": "1.1.0",
-  "description": "Converts emoticons into emoji as you type.",
+  "version": "1.2.0",
+  "description": "Suggests emoji for emoticons as you type.",
   "scripts": {
     "build": "vite build",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
@@ -10,6 +10,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@codemirror/autocomplete": "^6.0.0",
     "@codemirror/commands": "^6.0.0",
     "@codemirror/language": "^6.0.0",
     "@codemirror/state": "^6.0.0",
@@ -17,7 +18,7 @@
     "emoticon": "^4.1.0"
   },
   "devDependencies": {
-    "@lezer/markdown": "^1.0.0",
+    "@codemirror/lang-markdown": "^6.0.0",
     "@types/node": "^22.0.0",
     "markedit-api": "https://github.com/MarkEdit-app/MarkEdit-api#v0.30.0",
     "markedit-vite": "https://github.com/MarkEdit-app/MarkEdit-vite#v0.5.0",

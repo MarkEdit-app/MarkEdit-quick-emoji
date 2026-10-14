@@ -1,9 +1,11 @@
 # MarkEdit-quick-emoji
 
-Silently converts emoticons like `:)` to 😃 as you type. Pasted text and
-emoticons inside code, HTML, front matter, or URLs are ignored. Each
-conversion is a separate undo step, so <kbd>Command-Z</kbd> restores the emoticon.
-Mappings that conflict with Markdown syntax are skipped.
+Suggests emoji as you type emoticons like `:)` or `Hi:)`, using MarkEdit's
+autocomplete dropdown. Choose a suggestion to replace the emoticon, or dismiss
+the list to keep your text. <kbd>Command-Z</kbd> undoes an accepted suggestion.
+
+Suggestions are hidden in parsed code, HTML, front matter, and URLs. Incomplete
+Markdown may still show suggestions.
 
 ## Installation
 
@@ -22,7 +24,7 @@ yarn build
 ## Custom mappings
 
 Set `extension.markeditQuickEmoji.mappings` in MarkEdit's `settings.json`.
-Custom entries override bundled mappings.
+Custom entries override bundled mappings and appear in the suggestion list.
 
 ```json
 {

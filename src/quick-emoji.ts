@@ -1,30 +1,31 @@
+import { pickedCompletion } from '@codemirror/autocomplete';
 import { isolateHistory } from '@codemirror/commands';
 import { syntaxTree } from '@codemirror/language';
-import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { emoticon } from 'emoticon';
-import type { EditorState, SelectionRange } from '@codemirror/state';
+import type { CompletionContext, CompletionResult, CompletionSource } from '@codemirror/autocomplete';
+import type { EditorState } from '@codemirror/state';
 
 type Mapping = {
   emoticon: string;
   emoji: string;
-};
-
-type MappingIndex = {
-  byEnd: Map<string, Mapping[]>;
-  maxLength: number;
+  name: string;
 };
 
 const protectedNodes = new Set([
   'CodeBlock',
   'Comment',
+  'CommentBlock',
   'FencedCode',
   'FrontMatter',
   'HTMLBlock',
   'HTMLTag',
   'InlineCode',
-  'ListMark',
+  'LinkMark',
   'LinkTitle',
+  'ListMark',
+  'QuoteMark',
+  'TaskMarker',
   'URL',
 ]);
 
@@ -34,221 +35,109 @@ const shortcode = /^:[\p{L}\p{N}_+-]+:$/u;
 const urlPrefix = /(?:[a-z][a-z\d+.-]*:\/\/|(?:data|mailto|sms|tel|urn):|www\.)\S*$/i;
 const emailPrefix = /\b[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function createQuickEmoji(custom?: unknown) {
-  const index = buildIndex(custom);
+export function createQuickEmojiCompletion(custom?: unknown): CompletionSource {
+  const mappings = buildMappings(custom);
+  const maxLength = Math.max(0, ...mappings.map(mapping => mapping.emoticon.length));
 
-  return EditorView.inputHandler.of((view, _from, _to, _text, insert) => {
-    const input = insert();
-    if (!input.docChanged || !input.isUserEvent('input.type') || input.isUserEvent('input.type.compose')) {
-      return false;
+  const complete = (context: CompletionContext): CompletionResult | null => {
+    const { state, pos, view } = context;
+    const selection = state.selection.main;
+    if (state.readOnly || !state.facet(EditorView.editable) || view?.composing
+      || state.selection.ranges.length !== 1 || !selection.empty || selection.head !== pos) {
+      return null;
     }
 
-    const inputEnds = new Set<number>();
-    input.changes.iterChanges((_fromA, _toA, _fromB, toB, inserted) => {
-      if (inserted.length > 0) {
-        inputEnds.add(toB);
+    const line = state.doc.lineAt(pos);
+    if (pos !== line.to && !tokenBoundary.test(state.sliceDoc(pos, pos + 1))) {
+      return null;
+    }
+
+    const start = Math.max(line.from, pos - maxLength);
+    const prefix = state.sliceDoc(start, pos);
+    let rejectedExact = false;
+    for (let offset = 0; offset < prefix.length; offset++) {
+      const query = prefix.slice(offset);
+      const from = start + offset;
+      const atSpaceBoundary = from === line.from || /\s/.test(state.sliceDoc(from - 1, from));
+      if (/\s/.test(query) || (!context.explicit && query.length < 2
+        && (wordStart.test(query) || !atSpaceBoundary))) {
+        continue;
       }
-    });
 
-    const replacements = input.state.changeByRange(range => replacementForRange(
-      input.state,
-      range,
-      inputEnds,
-      index,
-    ));
+      const atBoundary = from === line.from || tokenBoundary.test(state.sliceDoc(from - 1, from));
+      const matches = mappings.filter(mapping => mapping.emoticon.startsWith(query));
+      const candidates = matches.filter(mapping => (!rejectedExact || mapping.emoticon === query)
+        && (atBoundary || !(wordStart.test(mapping.emoticon) || shortcode.test(mapping.emoticon))));
+      if (candidates.length === 0) {
+        rejectedExact ||= matches.some(mapping => mapping.emoticon === query);
+        continue;
+      }
 
-    if (replacements.changes.empty) {
-      return false;
+      const linePrefix = state.sliceDoc(line.from, from);
+      if (urlPrefix.test(linePrefix) || emailPrefix.test(linePrefix) || isProtectedSyntax(state, from, pos)) {
+        return null;
+      }
+
+      const byEmoji = new Map<string, Mapping>();
+      for (const mapping of candidates) {
+        if (!byEmoji.has(mapping.emoji) || mapping.emoticon === query) {
+          byEmoji.set(mapping.emoji, mapping);
+        }
+      }
+
+      return {
+        from,
+        to: pos,
+        filter: false,
+        update: (_result, _from, _to, context) => complete(context),
+        options: [...byEmoji.values()].sort((left, right) =>
+          Number(right.emoticon === query) - Number(left.emoticon === query)).map(mapping => ({
+          label: `${mapping.emoji} ${mapping.name.replace(/_/g, ' ')}`,
+          detail: mapping.emoticon,
+          type: 'emoji',
+          apply: (editor, completion, from, to) => editor.dispatch({
+            changes: { from, to, insert: mapping.emoji },
+            selection: { anchor: from + mapping.emoji.length },
+            annotations: [pickedCompletion.of(completion), isolateHistory.of('full')],
+            userEvent: 'input.complete',
+          }),
+        })),
+      };
     }
 
-    const replacement = input.state.update({
-      ...replacements,
-      annotations: [Transaction.addToHistory.of(true), isolateHistory.of('full')],
-      userEvent: 'input.type',
-    });
+    return null;
+  };
 
-    view.dispatch([input, replacement]);
-    return true;
-  });
+  return complete;
 }
 
-function buildIndex(custom: unknown): MappingIndex {
+function buildMappings(custom: unknown): Mapping[] {
   const byEmoticon = new Map(emoticon
     .filter(entry => entry.name !== 'man')
-    .flatMap(entry => entry.emoticons.map(value => [value, entry.emoji] as const)));
-  const byEnd = new Map<string, Mapping[]>();
-  const customKeys = new Set<string>();
+    .flatMap(entry => entry.emoticons.map(value => [value, {
+      emoticon: value,
+      emoji: entry.emoji,
+      name: entry.name,
+    }] as const)));
 
   if (typeof custom === 'object' && custom !== null && !Array.isArray(custom)) {
     for (const [value, emoji] of Object.entries(custom)) {
       if (value.length > 0 && typeof emoji === 'string' && emoji.length > 0) {
-        byEmoticon.set(value, emoji);
-        customKeys.add(value);
+        byEmoticon.set(value, {
+          emoticon: value,
+          emoji,
+          name: emoticon.find(entry => entry.emoji === emoji)?.name ?? 'Custom emoji',
+        });
       }
     }
   }
 
-  const allMappings = Array.from(byEmoticon, ([emoticon, emoji]) => ({ emoticon, emoji }));
-  const filteredMappings = allMappings.filter(mapping => customKeys.has(mapping.emoticon) || !allMappings.some(candidate =>
-    candidate.emoticon.length > mapping.emoticon.length && candidate.emoticon.startsWith(mapping.emoticon)
-  ));
-
-  for (const mapping of filteredMappings) {
-    const lastChar = mapping.emoticon[mapping.emoticon.length - 1];
-    const candidates = byEnd.get(lastChar) ?? [];
-    candidates.push(mapping);
-    candidates.sort((left, right) => right.emoticon.length - left.emoticon.length);
-    byEnd.set(lastChar, candidates);
-  }
-
-  return {
-    byEnd,
-    maxLength: Math.max(...filteredMappings.map(mapping => mapping.emoticon.length)),
-  };
-}
-
-function replacementForRange(
-  state: EditorState,
-  range: SelectionRange,
-  inputEnds: Set<number>,
-  index: MappingIndex,
-) {
-  if (!range.empty || !inputEnds.has(range.head)) {
-    return { range };
-  }
-
-  const mapping = findMapping(state, range.head, index);
-  if (mapping === undefined) {
-    return { range };
-  }
-
-  const from = range.head - mapping.emoticon.length;
-  return {
-    changes: { from, to: range.head, insert: mapping.emoji },
-    range: EditorSelection.cursor(from + mapping.emoji.length),
-  };
-}
-
-function findMapping(
-  state: EditorState,
-  position: number,
-  index: MappingIndex,
-) {
-  const line = state.doc.lineAt(position);
-  const prefix = state.sliceDoc(Math.max(line.from, position - index.maxLength), position);
-  const candidates = index.byEnd.get(prefix[prefix.length - 1]) ?? [];
-
-  for (const mapping of candidates) {
-    if (!prefix.endsWith(mapping.emoticon)) {
-      continue;
-    }
-
-    const from = position - mapping.emoticon.length;
-    if (conflictsWithMarkdown(state, from, mapping)
-      || isProtectedContext(state, from, position)) {
-      return undefined;
-    }
-
-    if (hasTokenBoundaries(state, from, position, mapping)) {
-      return mapping;
-    }
-  }
-
-  return undefined;
-}
-
-function conflictsWithMarkdown(state: EditorState, from: number, mapping: Mapping) {
-  const line = state.doc.lineAt(from);
-  const linePrefix = state.sliceDoc(line.from, from);
-  if (mapping.emoticon.endsWith(']') && hasOpenBracket(linePrefix)) {
-    return true;
-  }
-
-  const atBlockMarker = /^\s*(?:>\s*)*$/.test(linePrefix);
-  return atBlockMarker && (mapping.emoticon === '8)' || mapping.emoticon.startsWith('>'));
-}
-
-function hasOpenBracket(text: string) {
-  let depth = 0;
-  for (let index = 0; index < text.length; index++) {
-    if (text[index] === '\\') {
-      index++;
-    } else if (text[index] === '[') {
-      depth++;
-    } else if (text[index] === ']' && depth > 0) {
-      depth--;
-    }
-  }
-
-  return depth > 0;
-}
-
-function hasTokenBoundaries(state: EditorState, from: number, to: number, mapping: Mapping) {
-  const line = state.doc.lineAt(from);
-  const needsStart = wordStart.test(mapping.emoticon) || shortcode.test(mapping.emoticon);
-  const starts = !needsStart || from === line.from || tokenBoundary.test(state.sliceDoc(from - 1, from));
-  const ends = to === line.to || tokenBoundary.test(state.sliceDoc(to, to + 1));
-  return starts && ends;
-}
-
-function isProtectedContext(state: EditorState, from: number, to: number) {
-  const line = state.doc.lineAt(from);
-  const linePrefix = state.sliceDoc(line.from, from);
-  return urlPrefix.test(linePrefix)
-    || emailPrefix.test(linePrefix)
-    || hasOpenCodeSpan(linePrefix)
-    || hasOpenHtmlTag(linePrefix)
-    || isProtectedSyntax(state, from, to);
-}
-
-function hasOpenCodeSpan(text: string) {
-  let delimiter = 0;
-  for (let index = 0; index < text.length;) {
-    if (text[index] !== '`' || (delimiter === 0 && isEscaped(text, index))) {
-      index++;
-      continue;
-    }
-
-    let end = index + 1;
-    while (text[end] === '`') {
-      end++;
-    }
-
-    const length = end - index;
-    if (delimiter === 0) {
-      delimiter = length;
-    } else if (delimiter === length) {
-      delimiter = 0;
-    }
-
-    index = end;
-  }
-
-  return delimiter > 0;
-}
-
-function hasOpenHtmlTag(text: string) {
-  let open = text.lastIndexOf('<');
-  while (open >= 0 && isEscaped(text, open)) {
-    open = text.lastIndexOf('<', open - 1);
-  }
-
-  return open > text.lastIndexOf('>')
-    && /^(?:<\/?[a-z][a-z\d-]*(?:\s|\/|$)|<!--|<![A-Z]|<\?)/i.test(text.slice(open));
-}
-
-function isEscaped(text: string, position: number) {
-  let slashes = 0;
-  while (position > slashes && text[position - slashes - 1] === '\\') {
-    slashes++;
-  }
-
-  return slashes % 2 === 1;
+  return [...byEmoticon.values()];
 }
 
 function isProtectedSyntax(state: EditorState, from: number, to: number) {
   const tree = syntaxTree(state);
-  for (const position of [from, Math.max(from, to - 1)]) {
+  for (const position of [from, to]) {
     let node = tree.resolveInner(position, position === from ? 1 : -1);
     while (true) {
       if (protectedNodes.has(node.name)) {
